@@ -5,20 +5,19 @@ import tempfile
 from typing import List
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, HttpUrl
-from dotenv import load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, GoogleGenerativeAI
 from langchain_pinecone import PineconeVectorStore
 from pinecone import Pinecone, ServerlessSpec
-
+from dotenv import load_dotenv
 load_dotenv()
 
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 
 INDEX_NAME = "pdfquora"
-NAMESPACE = "pdf"
+NAMESPACE = "default"
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 150
 TOP_K = 5
@@ -148,9 +147,8 @@ Answer: Provide a clear and detailed answer based only on the information given 
 
 def generate_answer(prompt: str) -> str:
     llm = GoogleGenerativeAI(
-        model="gemini-1.5-pro",
-        temperature=0.0,
-        google_api_key=GOOGLE_API_KEY
+        model="models/gemini-2.5-flash",
+        temperature=0.0
     )
 
     response = llm.invoke(prompt)
@@ -169,38 +167,41 @@ async def root():
 @app.post("/query")
 async def query_pdf(request: QueryRequest):
     try:
-        start_time = time.time()
-
         if not request.question.strip():
             raise HTTPException(status_code=400, detail="Question cannot be empty")
 
-        # Initialize services
+        start_time = time.time()
+
         index = init_pinecone()
-        embedding = init_embedding()
+        print(f"Index created")
 
-        # Clear any existing data first
-        clear_index(index)
-
-        # Download and process PDF
         pdf_bytes = download_pdf(request.url)
+        print(f"PDF downloaded: {len(pdf_bytes)} bytes")
+
         chunks = split_pdf_chunks(pdf_bytes)
+        print(f"Chunks split: {len(chunks)}")
 
-        # Store in vector database
+        embedding = init_embedding()
+        print(f"Embedding Model instance created: {embedding}")
+
         embed_and_store_chunks(chunks, index, embedding)
+        print(f"Chunks embedded: {len(chunks)}")
 
-        # Retrieve relevant context
         documents = retrieve_context(request.question, embedding, index)
+        print(f"Documents retrieved: {len(documents)}")
+
+        embedding_time = time.time() - start_time
+        print(f"Total embedding time: {embedding_time}")
 
         if not documents:
             answer = "No relevant information found in the PDF for your question."
             confidence = "low"
         else:
-            # Generate answer
             prompt = create_prompt(request.question, documents)
             answer = generate_answer(prompt)
+            print(f"Answer generated: {answer}")
             confidence = "high" if len(documents) >= 3 else "medium"
 
-        # Clean up - delete the data after getting answer
         clear_index(index)
 
         response_time = time.time() - start_time
